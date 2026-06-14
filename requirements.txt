@@ -10,13 +10,10 @@ pyomo==6.10.0
 gurobipy~=13.0
 #
 # Tier 2 — compatible release. Stable surface APIs at our usage level
-# (sliders, data_editor, charts), so accept patch upgrades for security
-# and bug fixes.
+# (sliders, charts), so accept patch upgrades for security and bug fixes.
+# pandas stays on 2.x: Streamlit 1.52 caps pandas <3, so pandas~=3.0 makes
+# the image's pip resolve impossible. The app uses no st.dataframe/.style, so
+# no jinja2 (Styler) pin is needed.
 streamlit~=1.52.0
-pandas~=3.0.0
+pandas~=2.0
 altair~=5.0.0
-#
-# Pandas Styler dependency. Pandas 3.x demands jinja2>=3.1.5 for `.style`
-# and `st.dataframe`'s default rendering path can trip the version-mismatch
-# check. Pin to keep that out of the failure modes.
-jinja2~=3.1.5
