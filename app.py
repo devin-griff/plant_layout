@@ -1073,7 +1073,7 @@ def render_optimizer(ss):
         [data-testid="stMainBlockContainer"]
             [data-testid="stHorizontalBlock"] {
             margin-bottom: -0.75rem;
-            gap: 0.5rem !important;
+            gap: 0.35rem !important;
         }
         [data-testid="stMainBlockContainer"] [data-testid="stWidgetLabel"] {
             margin-bottom: 0.25rem !important;
@@ -1112,7 +1112,7 @@ def render_optimizer(ss):
         """,
         unsafe_allow_html=True,
     )
-    editor_col, viz_col = st.columns([4, 8])
+    editor_col, viz_col = st.columns([3.5, 8.5])
 
     with editor_col:
         _render_object_editor(ss)
