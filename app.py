@@ -1575,7 +1575,7 @@ with _caption_col:
         "objects, set the options, and click **Solve**. If the time limit is "
         "reached, the best incumbent solution will be returned, as well as up "
         "to four other maximally different solutions from Gurobi's solution "
-        "pool."
+        "pool. For reference, the optimal objective for the default instance is 77."
     )
 
 # ---- Tabs ----
