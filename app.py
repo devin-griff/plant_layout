@@ -3,7 +3,7 @@
 #
 # Process plant layout problem solved via Pyomo GDP. Place rectangular
 # blocks in 2D space to minimize:
-#   - facility bounding-box dimensions  (l_f + w_f), plus
+#   - plant bounding-box dimensions  (l_f + w_f), plus
 #   - cost-weighted Manhattan pipe distances between blocks
 #                                       (Σ c_ij · (t_ij + s_ij))
 #
@@ -109,7 +109,7 @@ st.set_page_config(
 )
 
 # Fixed-corner home logo (no sidebar — all controls are inline on the
-# Optimizer tab). Same pattern as strip-packing / diet / knapsack.
+# Optimizer tab).
 _FAVICON_DATA_URL = "data:image/png;base64," + base64.b64encode(
     (Path(__file__).parent / "favicon.png").read_bytes()
 ).decode()
@@ -152,18 +152,18 @@ DIM_RAND_MAX = 3           # Randomize draws dimensions from [1, 3]
 COST_MIN, COST_MAX = 1, 9  # editable pipe-cost range (each object pipes to its assigned rack end)
 COST_RAND_MAX = 3          # Randomize draws costs from [1, 3]
 
-# Weight on the facility bounding box (l_f + w_f) relative to the cost-weighted
+# Weight on the plant bounding box (l_f + w_f) relative to the cost-weighted
 # piping in the objective. The two terms are not in the same natural units, so
 # this is the size-vs-piping knob. Default 1, no UI control.
 FOOTPRINT_WEIGHT = 1.0
 
-# The rack (object 1) spans the facility length: fixed long-and-thin dims, and
+# The rack (object 1) spans the plant length: fixed long-and-thin dims, and
 # always the longest object so every instance stays feasible. Reset and
 # Randomize both keep these — only the other objects' dims/costs change.
 RACK_LEN, RACK_WID = 9, 1
 DEFAULT_N = 15             # objects present on first load / after Reset
 
-# Minimum separation distance (integer stepper, like strip-packing's width).
+# Minimum separation distance (integer stepper).
 D_MIN, D_MAX, D_DEFAULT = 0, 3, 1
 
 # Time-limit presets for the inline radio (label → seconds).
@@ -181,11 +181,10 @@ DEFAULT_SEED = 1
 
 # Categorical palette — each object's index drives BOTH its editor badge color
 # and its block fill in the layout, so the two views stay visually linked
-# (object 1, the rack, gets the first color). Same palette as strip-packing.
+# (object 1, the rack, gets the first color).
 # At least MAX_OBJECTS distinct colors so no two objects ever share one (the
 # index→color map is `_PALETTE[(i-1) % len]`, so the list must be >= the object
-# count to avoid repeats). The first twelve match strip-packing; the rest extend
-# the categorical set out to the 25-object cap.
+# count to avoid repeats).
 _PALETTE = [
     "#4C78A8", "#F58518", "#54A24B", "#E45756", "#72B7B2", "#EECA3B",
     "#B279A2", "#FF9DA6", "#9D755D", "#BAB0AC", "#1F77B4", "#9467BD",
@@ -373,26 +372,26 @@ def build_model(n, l0, w0, cmat, d_uniform, rotate, sym):
     m.w = pyo.Var(m.n, bounds=(0, m.UB))      # block width  (= w0 unless rotated)
     m.dx = pyo.Var(m.p, bounds=(0, m.UB))     # x-axis (horizontal) edge gap
     m.dy = pyo.Var(m.p, bounds=(0, m.UB))     # y-axis (vertical) edge gap
-    m.l_f = pyo.Var(within=pyo.NonNegativeReals)  # facility length
-    m.w_f = pyo.Var(within=pyo.NonNegativeReals)  # facility width
+    m.l_f = pyo.Var(within=pyo.NonNegativeReals)  # plant length
+    m.w_f = pyo.Var(within=pyo.NonNegativeReals)  # plant width
 
-    # Facility bounds: every block lies inside the facility's bounding box.
+    # Plant bounds: every block lies inside the plant's bounding box.
     # Length is the vertical (y) axis; width the horizontal (x) axis.
     @m.Constraint(m.n)
-    def facility_length(m, i):
+    def plant_length(m, i):
         return m.l_f >= m.y[i] + m.l[i]
 
     @m.Constraint(m.n)
-    def facility_width(m, i):
+    def plant_width(m, i):
         return m.w_f >= m.x[i] + m.w[i]
 
-    # Pipe rack (block 1) spans the facility length (the vertical y-axis):
-    # pinned at y=0 with the facility length fixed to the rack's length. Every
+    # Pipe rack (block 1) spans the plant length (the vertical y-axis):
+    # pinned at y=0 with the plant length fixed to the rack's length. Every
     # other object then fits within [0, l_1] in y and sits to the LEFT or RIGHT
     # of the rack (in x). The rack's x is free; only the WIDTH (horizontal x)
     # is minimized.
     m.rack_at_origin = pyo.Constraint(expr=m.y[1] == 0)
-    m.facility_len_eq_rack = pyo.Constraint(expr=m.l_f == m.l[1])
+    m.plant_len_eq_rack = pyo.Constraint(expr=m.l_f == m.l[1])
 
     # Implicit pipe-rack tie-in headers: each zero-length object is pinned flush
     # to one end of the main rack and aligned to its x. The lowest-index header
@@ -440,7 +439,7 @@ def build_model(n, l0, w0, cmat, d_uniform, rotate, sym):
         def sym_1(m):
             return m.x[1] + m.w[1] / 2 <= m.x[2] + m.w[2] / 2
 
-    # Objective: minimize facility size + Σ pipe-weighted Manhattan distances.
+    # Objective: minimize plant size + Σ pipe-weighted Manhattan distances.
     m.obj = pyo.Objective(
         expr=FOOTPRINT_WEIGHT * (m.l_f + m.w_f)
              + sum(m.c[i, j] * (m.dx[i, j] + m.dy[i, j]) for i, j in m.p),
@@ -588,7 +587,7 @@ def _run_gurobi(m, time_limit, extract_fn, pool_size):
 
 def _extract_layout(m, rotate, l0):
     """Read the model's current solution into a plain layout dict (blocks, pipe
-    pairs, objective, facility size, total piping cost). Called once per pooled
+    pairs, objective, plant size, total piping cost). Called once per pooled
     solution, each time with a different pool member loaded onto the model."""
     blocks = []
     for i in m.n:
@@ -613,7 +612,7 @@ def _extract_layout(m, rotate, l0):
         "blocks": blocks,
         "pairs": pairs,
         "obj": float(pyo.value(m.obj)),
-        "facility": (float(pyo.value(m.l_f)), float(pyo.value(m.w_f))),
+        "plant": (float(pyo.value(m.l_f)), float(pyo.value(m.w_f))),
         "pipe_cost": sum(p["c"] * (p["dx"] + p["dy"]) for p in pairs),
     }
 
@@ -756,7 +755,7 @@ def solve(n, l0, w0, cmat, d_uniform, rotate, sym, time_limit):
         "status": status,
         "solutions": solutions,
         # Best layout's fields also at top level, so any consumer reading
-        # res["blocks"]/["facility"]/etc. still gets the headline solution.
+        # res["blocks"]/["plant"]/etc. still gets the headline solution.
         **solutions[0],
         "lower_bound": lower_bound,
         "gap": gap,
@@ -824,7 +823,7 @@ def build_layout_chart(res):
     """Multi-layered Altair chart for the optimal layout.
 
     Layers (back-to-front):
-      1. Outer facility bounding box (dashed)
+      1. Outer plant bounding box (dashed)
       2. Pipe overlay — L-shaped paths via edge-port routing, opacity ∝ c_ij,
          linked-hover dims non-hovered pipes
       3. Block rectangles (fill = connectivity), border highlights orange
@@ -837,7 +836,7 @@ def build_layout_chart(res):
     """
     blocks = res["blocks"]
     pairs = res["pairs"]
-    l_f, w_f = res["facility"]
+    l_f, w_f = res["plant"]
 
     conn = _connectivity(blocks, pairs)
     blocks_by_id = {b["i"]: b for b in blocks}
@@ -989,7 +988,7 @@ def build_layout_chart(res):
     _w_px = max(160, round(_x_span * _scale))
     _h_px = max(160, round(_y_span * _scale))
 
-    df_facility = pd.DataFrame([{"x": 0, "y": 0, "x2": w_f, "y2": l_f}])
+    df_plant = pd.DataFrame([{"x": 0, "y": 0, "x2": w_f, "y2": l_f}])
 
     # ── Linked-hover selections ───────────────────────────────────────────
     # Two parallel selections: one bound to the pipe layer (`hover`), one to
@@ -1046,7 +1045,7 @@ def build_layout_chart(res):
         y=alt.Y("y:Q", scale=alt.Scale(domain=y_dom), title="y"),
     )
 
-    facility_box = alt.Chart(df_facility).mark_rect(
+    plant_box = alt.Chart(df_plant).mark_rect(
         fill=None, stroke="#374151", strokeWidth=1.5, strokeDash=[6, 4],
     ).encode(
         x=alt.X("x:Q", scale=alt.Scale(domain=x_dom), title="x"),
@@ -1101,7 +1100,7 @@ def build_layout_chart(res):
     # the block rectangles so the run alongside the rack (the vertical leg sits
     # exactly on the rack's edge) is visible instead of being painted over by
     # the rack. Block-id labels stay on top of everything.
-    layers = [facility_box, block_rects]
+    layers = [plant_box, block_rects]
     if has_pipes:
         visible_pipes = alt.Chart(df_pipes).mark_rule().encode(
             x=alt.X("x:Q", title="x"), y=alt.Y("y:Q", title="y"),
@@ -1133,7 +1132,7 @@ def build_layout_chart(res):
     if res.get("status") == "preview":
         _one = pd.DataFrame([{"_": 0}])
         # Center the badge vertically between the top of the plot and the dashed
-        # facility-top line. That line sits `pad` data-units below the plot top,
+        # plant-top line. That line sits `pad` data-units below the plot top,
         # so it's `_dash_px` pixels down; the badge goes at half that.
         _dash_px = _h_px * pad / (y_dom[1] - y_dom[0])
         _bx = _w_px / 2.0
@@ -1170,7 +1169,7 @@ def build_layout_chart(res):
 
 def _render_metric(slot, label, value):
     """Metric-shaped block via raw HTML — small gray label, large value.
-    Matches strip-packing's top-row metrics so the five read consistently."""
+    The five top-row metrics read consistently."""
     slot.markdown(
         "<div style='margin:0.25rem 0 1.3rem 0; line-height:1.2;'>"
         "<div style='font-size:0.875rem; margin-bottom:0.6rem; "
@@ -1195,7 +1194,7 @@ def _render_object_editor(ss):
     """Inline object editor (left column of the Optimizer tab): one row per
     object with Length / Width / pipe-cost-to-rack steppers. Object 1 is the
     rack — fixed in the list, no pipe-cost cell, not deletable. Add / Reset /
-    Randomize below. Same fixed-slot pattern as strip-packing."""
+    Randomize below."""
     st.markdown(f"#### Objects (max {MAX_OBJECTS})")
 
     ver = ss["_obj_ver"]
@@ -1301,14 +1300,14 @@ def _render_object_editor(ss):
 
 def _preview_res(ss):
     """Naive 'initialized' layout for the unsolved view, consistent with the
-    rack-spans-the-facility constraint: the rack sits at the origin spanning
-    the facility length (vertical y), with the other objects column-packed to
+    rack-spans-the-plant constraint: the rack sits at the origin spanning
+    the plant length (vertical y), with the other objects column-packed to
     its right within that length. Costs are zeroed so no pipes draw. Shaped
     like a solve result so build_layout_chart renders it directly."""
     objs = ss["objs"]
     n = len(objs)
     gap = 1.0
-    rl = float(ss["length"][objs[0]])              # rack length (along y) = facility length
+    rl = float(ss["length"][objs[0]])              # rack length (along y) = plant length
     rw = float(ss["width"][objs[0]])               # rack width (along x), thin
     # Rack on the left, spanning the length (y); objects column-packed to its
     # right, stacking in y within the rack length and wrapping to a new column.
@@ -1330,7 +1329,7 @@ def _preview_res(ss):
     pairs = [{"i": i, "j": j, "c": 0.0}
              for i in range(1, n + 1) for j in range(1, i)]
     return {"status": "preview", "blocks": blocks, "pairs": pairs,
-            "facility": (rl, x + col_w)}
+            "plant": (rl, x + col_w)}
 
 
 def _clear_solution():
@@ -1532,12 +1531,12 @@ def _viz_panel(ss):
 
     has = res is not None and res["status"] in ("optimal", "incumbent")
     if has:
-        w_f = sel["facility"][1]
+        w_f = sel["plant"][1]
         # Positions are integer in practice (integer dims + separation), so the
-        # objective, facility size, and piping cost are integers up to solver
+        # objective, plant size, and piping cost are integers up to solver
         # round-off — show them as whole numbers.
         objv = f"{sel['obj']:.0f}"
-        facW = f"{w_f:.0f}"
+        plantW = f"{w_f:.0f}"
         pipe = f"{sel['pipe_cost']:.0f}"
         if res["status"] == "optimal":
             gap = "0%"
@@ -1548,10 +1547,10 @@ def _viz_panel(ss):
         elapsed = res.get("elapsed")
         tstr = f"{elapsed:.1f}s" if elapsed is not None else "—"
     else:
-        objv = facW = pipe = gap = tstr = "—"
+        objv = plantW = pipe = gap = tstr = "—"
 
     _render_metric(top[4], "Objective", objv)
-    _render_metric(top[5], "Facility width", facW)
+    _render_metric(top[5], "Plant width", plantW)
     _render_metric(top[6], "Total piping cost", pipe)
     _render_metric(top[7], "Gap", gap)
     _render_metric(top[8], "Total time", tstr)
@@ -1563,22 +1562,22 @@ def render_formulation():
     st.markdown(r"""
 ### Layout Formulation
 
-Place $n$ rectangular objects so that the facility's bounding-box
+Place $n$ rectangular objects so that the plant's bounding-box
 dimensions plus the cost-weighted Manhattan pipe distance from each object to
 its assigned north or south end of the rack are minimized. Width is the
 horizontal ($x$) axis, length the vertical ($y$):
 
 $$\min \; \lambda \,(l_f + w_f) + \sum_{i,j \in N,\; j<i} c_{ij} \big( dx_{ij} + dy_{ij} \big)$$
 
-where $\lambda$ weights the facility size against the piping cost (default 1).
+where $\lambda$ weights the plant size against the piping cost (default 1).
 
-subject to the facility containing every object (length along $y$, width
+subject to the plant containing every object (length along $y$, width
 along $x$):
 
 $$l_f \ge y_i + l_i, \quad w_f \ge x_i + w_i \quad \forall \, i \in N$$
 
-The pipe **rack** (object 1) spans the facility length. It is pinned at the
-origin with the facility length fixed to the rack's, so every other object
+The pipe **rack** (object 1) spans the plant length. It is pinned at the
+origin with the plant length fixed to the rack's, so every other object
 fits within $[0, l_1]$ and sits to either side of the rack:
 
 $$y_1 = 0, \qquad l_f = l_1$$
@@ -1750,7 +1749,7 @@ st.markdown(
 _caption_col, _ = st.columns([6, 3])
 with _caption_col:
     st.markdown(
-        "A pipe **rack** spans the facility; place unit ops on either side of "
+        "A pipe **rack** spans the plant; place unit ops on either side of "
         "it to minimize piping cost to the north and south sides of the pipe "
         "rack. Edit the objects, set the options, and click **Solve**. If the "
         "time limit is reached, the best incumbent solution will be returned, "
