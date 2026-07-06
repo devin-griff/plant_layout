@@ -1,6 +1,6 @@
-# Facility Layout
+# Plant Layout
 
-Plant facility layout via GDP — minimize facility size + pipe costs
+Process plant layout via GDP — minimize facility size + pipe costs
 
 **Live demo:** https://facility-layout.griffith-pse.com  
 **Home:** https://griffith-pse.com

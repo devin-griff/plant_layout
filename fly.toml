@@ -3,7 +3,7 @@
 # Custom domain (set up via Cloudflare DNS, see SETUP.md):
 #   https://facility-layout.griffith-pse.com
 
-app = "griffith-pse-facility-layout"
+app = "griffith-pse-plant-layout"
 primary_region = "ord"  # Chicago — central US, low latency for North American users.
 
 [build]

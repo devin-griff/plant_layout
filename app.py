@@ -1,7 +1,7 @@
 # =============================================================================
-# Facility Layout Optimizer — a Streamlit tutorial app.
+# Plant Layout Optimizer — a Streamlit tutorial app.
 #
-# Plant facility layout problem solved via Pyomo GDP. Place rectangular
+# Process plant layout problem solved via Pyomo GDP. Place rectangular
 # blocks in 2D space to minimize:
 #   - facility bounding-box dimensions  (l_f + w_f), plus
 #   - cost-weighted Manhattan pipe distances between blocks
@@ -103,7 +103,7 @@ _materialize_gurobi_license()
 # ── 1. Page config + CSS + home-logo ──────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Facility Layout",
+    page_title="Plant Layout",
     page_icon="favicon.png",
     layout="wide",
 )
@@ -1735,7 +1735,7 @@ ss = st.session_state
 # ---- Title ----
 st.markdown(
     "<h2 style='margin: 0 0 0.25rem 0; padding: 0; font-size: 1.5rem; font-weight: 700;'>"
-    "Facility Layout GDP Optimizer "
+    "Plant Layout GDP Optimizer "
     "<span style='font-size: 1.15rem; font-weight: 400; color: #6b7280;'>"
     "powered by "
     "<a href='https://github.com/Pyomo/pyomo' target='_blank' "
