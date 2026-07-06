@@ -321,7 +321,7 @@ def _objs_to_inputs(ss):
 # ── 4. Solver ─────────────────────────────────────────────────────────────────
 
 def build_model(n, l0, w0, cmat, d_uniform, rotate, sym):
-    """Construct the GDP facility-layout model.
+    """Construct the GDP plant-layout model.
 
     Args:
         n         : int, number of blocks

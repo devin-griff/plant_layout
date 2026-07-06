@@ -1,7 +1,7 @@
 # Fly.io config for the Facility Layout Streamlit app.
-# Public URL after deploy: https://griffith-pse-facility-layout.fly.dev
+# Public URL after deploy: https://griffith-pse-plant-layout.fly.dev
 # Custom domain (set up via Cloudflare DNS, see SETUP.md):
-#   https://facility-layout.griffith-pse.com
+#   https://plant-layout.griffith-pse.com
 
 app = "griffith-pse-plant-layout"
 primary_region = "ord"  # Chicago — central US, low latency for North American users.
