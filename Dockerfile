@@ -45,8 +45,8 @@ COPY images/formulation.png ./images/
 # Streamlit's default index.html has no OG tags and link previews fall back
 # to a bare title.
 RUN STATIC=$(python -c "import streamlit, os; print(os.path.join(os.path.dirname(streamlit.__file__), 'static'))") \
-    && sed -i 's|<title>Streamlit</title>|<title>Facility Layout</title>|' "$STATIC/index.html" \
-    && sed -i 's|</head>|<link rel="icon" type="image/png" href="./favicon.png"/><meta property="og:type" content="website"/><meta property="og:title" content="Facility Layout"/><meta property="og:description" content="Plant facility layout via GDP — minimize facility size + pipe costs"/><meta property="og:image" content="https://griffith-pse.com/images/facility-layout.png"/><meta property="og:site_name" content="Griffith PSE"/><meta name="twitter:card" content="summary_large_image"/><meta name="twitter:title" content="Facility Layout"/><meta name="twitter:description" content="Plant facility layout via GDP — minimize facility size + pipe costs"/><meta name="twitter:image" content="https://griffith-pse.com/images/facility-layout.png"/></head>|' "$STATIC/index.html" \
+    && sed -i 's|<title>Streamlit</title>|<title>Plant Layout</title>|' "$STATIC/index.html" \
+    && sed -i 's|</head>|<link rel="icon" type="image/png" href="./favicon.png"/><meta property="og:type" content="website"/><meta property="og:title" content="Plant Layout"/><meta property="og:description" content="Plant facility layout via GDP — minimize facility size + pipe costs"/><meta property="og:image" content="https://griffith-pse.com/images/plant-layout.png"/><meta property="og:site_name" content="Griffith PSE"/><meta name="twitter:card" content="summary_large_image"/><meta name="twitter:title" content="Plant Layout"/><meta name="twitter:description" content="Plant facility layout via GDP — minimize facility size + pipe costs"/><meta name="twitter:image" content="https://griffith-pse.com/images/plant-layout.png"/></head>|' "$STATIC/index.html" \
     && cp /app/favicon.png "$STATIC/favicon.png" && cp /app/favicon.png "$STATIC/favicon.ico"
 
 # Run as a non-root user. If a future Streamlit (or transitive dep) RCE
