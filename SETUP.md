@@ -29,16 +29,16 @@ cd $APP_SLUG
 
 ## 2. Substitute placeholders
 
-Replace `facility-layout`, `Facility Layout`, `griffith-pse-facility-layout`, and `Plant facility layout via GDP — minimize facility size + pipe costs` in
+Replace `plant-layout`, `Plant Layout`, `griffith-pse-plant-layout`, and `Process plant layout via GDP — minimize plant size + pipe costs` in
 every text file (including the Dockerfile and fly.toml):
 
 ```bash
 find . -type f \( -name '*.py' -o -name '*.md' -o -name '*.toml' -o -name 'Dockerfile' \) \
     -exec sed -i \
-    "s|facility-layout|$APP_SLUG|g; \
-     s|Facility Layout|$APP_TITLE|g; \
-     s|griffith-pse-facility-layout|griffith-pse-$APP_SLUG|g; \
-     s|Plant facility layout via GDP — minimize facility size + pipe costs|$APP_TAGLINE|g" {} +
+    "s|plant-layout|$APP_SLUG|g; \
+     s|Plant Layout|$APP_TITLE|g; \
+     s|griffith-pse-plant-layout|griffith-pse-$APP_SLUG|g; \
+     s|Process plant layout via GDP — minimize plant size + pipe costs|$APP_TAGLINE|g" {} +
 ```
 
 Sanity check — no placeholders left:
@@ -114,10 +114,10 @@ gh secret list --repo devin-griff/$APP_SLUG
 
 In the Cloudflare dashboard for `griffith-pse.com`:
 
-- Type **A**, name `facility-layout`, value `66.241.124.X` (Fly's edge — get the
+- Type **A**, name `plant-layout`, value `66.241.124.X` (Fly's edge — get the
   exact IP from `flyctl certs add` below; often the same IP used by other
   apps in your org)
-- Type **AAAA**, name `facility-layout`, value `2a09:8280:1::112:XXXX:0`
+- Type **AAAA**, name `plant-layout`, value `2a09:8280:1::112:XXXX:0`
 - **Both records must be DNS-only (gray cloud)**, not Proxied. Streamlit's
   WebSocket connections won't survive Cloudflare's proxy on Fly origins.
 
@@ -149,15 +149,15 @@ that launches the app — matches the existing card pattern on the home page:
 
 ```markdown
 ::: {.g-col-12 .g-col-md-4}
-[![](images/facility-layout.png){.app-screenshot fig-alt="Facility Layout — click to launch"}](https://facility-layout.griffith-pse.com){.app-card-link target="_blank"}
+[![](images/plant-layout.png){.app-screenshot fig-alt="Plant Layout — click to launch"}](https://plant-layout.griffith-pse.com){.app-card-link target="_blank"}
 
-### Facility Layout
+### Plant Layout
 
 <short description of what the app does>
 :::
 ```
 
-You'll need to drop a screenshot of the app at `griffith-pse-site/images/facility-layout.png`
+You'll need to drop a screenshot of the app at `griffith-pse-site/images/plant-layout.png`
 (21:10 aspect ratio crops cleanly into the card grid). Push the site repo
 → Cloudflare Pages rebuilds in ~30 s.
 
