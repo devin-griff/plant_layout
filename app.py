@@ -26,8 +26,9 @@
 #   pair (i is left / right / above / below j); rotation (when enabled) is
 #   a 2-way disjunction per block (default vs. 90° rotated). Both are
 #   written as `pyomo.gdp.Disjunction` blocks and reformulated to a MILP
-#   via the Big-M GDP transformation, then solved with Gurobi. Pipe
-#   distances are computed by always-on dx/dy constraints, kept OUT of the
+#   via the Big-M GDP transformation, then solved with Gurobi.
+#   Pipe distances are rectilinear center-to-center (the literature
+#   convention), computed by always-on dx/dy constraints kept OUT of the
 #   disjunction so the objective never depends on which spatial relation is
 #   chosen — this avoids the costly continuous degeneracy that coupling
 #   distance into the disjuncts would create.
@@ -57,6 +58,7 @@
 import base64
 import contextlib
 import io
+import math
 import os
 import random
 import time
@@ -163,6 +165,13 @@ FOOTPRINT_WEIGHT = 1.0
 RACK_LEN, RACK_WID = 9, 1
 DEFAULT_N = 15             # objects present on first load / after Reset
 
+# Direct unit-to-unit connections (close-coupled pairs). The instance rolls a
+# full disjoint pairing of the non-rack objects; the "Connections" control
+# picks how many of those pairs are active, and "Cost ×" scales their pipe
+# cost relative to the rack tie-in range (dedicated large-bore routing).
+DEFAULT_PAIRS = 3
+PAIR_WEIGHT_MIN, PAIR_WEIGHT_MAX, PAIR_WEIGHT_DEFAULT = 1, 10, 10
+
 # Minimum separation distance (integer stepper).
 D_MIN, D_MAX, D_DEFAULT = 0, 3, 1
 
@@ -173,7 +182,10 @@ _TIME_LIMITS = {"10 s": 10, "30 s": 30, "60 s": 60}
 # to MAX_SOLUTIONS distinct ones in the layout selector. The degeneracy
 # breaking constraint in build_model is what makes pooled solutions distinct
 # physical layouts rather than duplicate indicator encodings of one layout.
-POOL_SIZE = 20      # candidates pulled from Gurobi's pool before diverse pick
+POOL_SIZE = 40      # candidates pulled from Gurobi's pool before diverse pick.
+                    # PoolSearchMode=2 keeps the n BEST solutions, which
+                    # cluster around similar geometry — a larger pool retains
+                    # the worse-but-different layouts the diverse pick needs.
 MAX_SOLUTIONS = 5   # distinct layouts shown in the selector
 
 # RNG seed for Randomize; bumped each click for a fresh instance.
@@ -223,6 +235,21 @@ def _gen_objects(seed, objs):
     return objs, length, width, cost, side
 
 
+def _gen_pairs(seed, objs):
+    """Roll a full disjoint pairing of the non-rack objects. Every pair has a
+    base cost of 1, so the 'Cost ×' control IS each pair's pipe cost. The
+    'Connections' control slices the first k pairs, so raising the count
+    extends the active set without re-rolling existing pairs. Seeded
+    independently of _gen_objects so the two draws don't perturb each
+    other."""
+    rng = random.Random(seed + 10_000_019)
+    units = list(objs[1:])
+    rng.shuffle(units)
+    all_pairs = [(units[k], units[k + 1]) for k in range(0, len(units) - 1, 2)]
+    pair_base = {p: 1 for p in all_pairs}
+    return all_pairs, pair_base
+
+
 def _default_data():
     """Initial / Reset instance: the rack plus DEFAULT_N-1 small objects."""
     return _gen_objects(DEFAULT_SEED, list(range(1, DEFAULT_N + 1)))
@@ -254,19 +281,36 @@ def _init_state():
     ss.setdefault("seed", DEFAULT_SEED)
     ss.setdefault("_obj_ver", 0)
     ss.setdefault("side", {})
+    ss.setdefault("n_pairs", DEFAULT_PAIRS)
+    ss.setdefault("pair_weight", PAIR_WEIGHT_DEFAULT)
     if "objs" not in ss:
         _set_data(*_default_data())
+    if "all_pairs" not in ss:
+        ss["all_pairs"], ss["pair_base"] = _gen_pairs(ss["seed"], ss["objs"])
     # Reset / Randomize set a one-shot flag and rerun; we apply it here, before
     # any editor widget is instantiated, so widget-backed keys don't clash.
     if ss.pop("_pending_reset", False):
         _set_data(*_default_data())
+        ss["all_pairs"], ss["pair_base"] = _gen_pairs(DEFAULT_SEED, ss["objs"])
+        ss["n_pairs"] = DEFAULT_PAIRS
+        ss["pair_weight"] = PAIR_WEIGHT_DEFAULT
         ss["_obj_ver"] += 1
         ss.pop("res", None)
     if ss.pop("_pending_random", False):
         ss["seed"] += 1
         _set_data(*_randomize_data(ss["seed"], ss["objs"]))
+        ss["all_pairs"], ss["pair_base"] = _gen_pairs(ss["seed"], ss["objs"])
         ss["_obj_ver"] += 1
         ss.pop("res", None)
+
+
+def _active_pairs(ss):
+    """The first n_pairs of the rolled pairing, weight-scaled: list of
+    (id_a, id_b, cost)."""
+    k = min(int(ss["n_pairs"]), len(ss["all_pairs"]))
+    w = int(ss["pair_weight"])
+    return [(a, b, w * ss["pair_base"][(a, b)])
+            for a, b in ss["all_pairs"][:k]]
 
 
 def add_object():
@@ -291,6 +335,9 @@ def _delete_object(oid):
     ss["objs"] = [i for i in ss["objs"] if i != oid]
     for key in ("length", "width", "cost", "side"):
         ss[key] = {i: v for i, v in ss[key].items() if i != oid}
+    # Drop any unit-to-unit pair touching the deleted object.
+    ss["all_pairs"] = [p for p in ss["all_pairs"] if oid not in p]
+    ss["pair_base"] = {p: c for p, c in ss["pair_base"].items() if oid not in p}
     ss.pop("res", None)
 
 
@@ -314,6 +361,14 @@ def _objs_to_inputs(ss):
     for p in range(2, nu + 1):
         h = north if ss["side"].get(objs[p - 1], "N") == "N" else south
         cmat[h - 1][p - 1] = float(ss["cost"][objs[p - 1]])
+    # Direct unit-to-unit connections: weight-scaled pipe costs between the
+    # active close-coupled pairs (lower-triangular, matching build_model).
+    pos = {oid: k + 1 for k, oid in enumerate(objs)}
+    for a, b, c in _active_pairs(ss):
+        pa, pb = pos.get(a), pos.get(b)
+        if pa is None or pb is None:
+            continue
+        cmat[max(pa, pb) - 1][min(pa, pb) - 1] += float(c)
     return n, l0, w0, cmat
 
 
@@ -407,27 +462,27 @@ def build_model(n, l0, w0, cmat, d_uniform, rotate, sym):
         m.pin_south_x = pyo.Constraint(expr=m.x[_hs] == m.x[1])
         m.pin_south_y = pyo.Constraint(expr=m.y[_hs] == 0)
 
-    # Rectilinear edge gaps, defined GLOBALLY (not inside the disjunction):
-    # dx_ij is the horizontal (x/width-axis) clearance between blocks i and j
-    # (0 when they overlap in x), dy_ij the vertical (y/length-axis). They're
-    # minimized in the objective, so each settles to the true gap. Keeping them
+    # Rectilinear center-to-center distances, defined GLOBALLY (not inside the
+    # disjunction): dx_ij >= |center_x(i) - center_x(j)| and dy_ij the same in
+    # y — the literature-standard distance convention. They're minimized in
+    # the objective, so each settles to the true center distance. Keeping them
     # out of the disjuncts makes the objective independent of which spatial
     # relation is chosen — the disjunction below decides only non-overlap.
     @m.Constraint(m.p)
     def dx_lb_a(m, i, j):
-        return m.dx[i, j] >= m.x[i] - (m.x[j] + m.w[j])
+        return m.dx[i, j] >= (m.x[i] + m.w[i] / 2) - (m.x[j] + m.w[j] / 2)
 
     @m.Constraint(m.p)
     def dx_lb_b(m, i, j):
-        return m.dx[i, j] >= m.x[j] - (m.x[i] + m.w[i])
+        return m.dx[i, j] >= (m.x[j] + m.w[j] / 2) - (m.x[i] + m.w[i] / 2)
 
     @m.Constraint(m.p)
     def dy_lb_a(m, i, j):
-        return m.dy[i, j] >= m.y[i] - (m.y[j] + m.l[j])
+        return m.dy[i, j] >= (m.y[i] + m.l[i] / 2) - (m.y[j] + m.l[j] / 2)
 
     @m.Constraint(m.p)
     def dy_lb_b(m, i, j):
-        return m.dy[i, j] >= m.y[j] - (m.y[i] + m.l[i])
+        return m.dy[i, j] >= (m.y[j] + m.l[j] / 2) - (m.y[i] + m.l[i] / 2)
 
     # Symmetry breaking: anchor block 1 left-of block 2's center, killing the
     # left/right mirror. Only the horizontal mirror is a symmetry here: the
@@ -451,19 +506,20 @@ def build_model(n, l0, w0, cmat, d_uniform, rotate, sym):
     # dx/dy constraints above, so these decide only feasibility (which pairs are
     # separated, on which axis), never the objective.
     #
-    # Degeneracy breaking constraint (d-aware Trespalacios & Grossmann): the
-    # left/right disjuncts additionally require the blocks to overlap vertically
-    # within d-1. A diagonally separated pair then has a vertical gap >= d, so it
-    # can only route through above/below, giving one encoding per physical
-    # layout. Without this, a pair separated on both axes has two valid
-    # encodings, and the solution pool fills with duplicate encodings of the
-    # same layout. The constraint is optimum-preserving (every layout keeps a
-    # valid encoding) and needs integer d, which the integer min-distance
-    # stepper guarantees.
+    # Degeneracy breaking constraint (d-aware Trespalacios & Grossmann,
+    # continuous-valid form): the left/right disjuncts additionally require
+    # the blocks to overlap vertically within d, so a pair with vertical gap
+    # > d can only route through above/below — one encoding per physical
+    # layout, keeping the solution pool free of duplicate encodings. The
+    # offset must be -d, not the tighter -(d-1): the d-1 form is only
+    # optimum-preserving when an integer-optimal layout is guaranteed, which
+    # the center-to-center objective breaks for odd dimensions (centers can
+    # be optimal at half-integers). The -d form is optimum-preserving for
+    # arbitrary continuous coordinates.
     @m.Disjunction(m.p)
     def no_overlap(m, i, j):
-        vov = [m.y[i] + m.l[i] >= m.y[j] - (m.d[i, j] - 1),
-               m.y[j] + m.l[j] >= m.y[i] - (m.d[i, j] - 1)]
+        vov = [m.y[i] + m.l[i] >= m.y[j] - m.d[i, j],
+               m.y[j] + m.l[j] >= m.y[i] - m.d[i, j]]
         return [
             [m.x[i] + m.w[i] + m.d[i, j] <= m.x[j]] + vov,   # i left of j
             [m.x[j] + m.w[j] + m.d[i, j] <= m.x[i]] + vov,   # i right of j
@@ -539,6 +595,11 @@ def _run_gurobi(m, time_limit, extract_fn, pool_size):
     # Solution pool: keep the best `pool_size` feasible solutions found.
     opt.gurobi_options['PoolSearchMode'] = 2          # find the n best
     opt.gurobi_options['PoolSolutions'] = int(pool_size)
+    # MIPFocus=1 (feasibility focus): the app's short time limits reward
+    # finding many good incumbents — that's what fills the solution pool the
+    # layout selector depends on. Bound-focused settings prove faster but
+    # find few incumbents along the way, starving the pool.
+    opt.gurobi_options['MIPFocus'] = 1
     buf = io.StringIO()
     sols = []
     try:
@@ -742,8 +803,9 @@ def solve(n, l0, w0, cmat, d_uniform, rotate, sym, time_limit):
         # layout rather than crash the UI.
         return {"status": "no_feasible", "log": log}
 
-    # Optimality gap is a property of the run: best objective vs Gurobi's dual
-    # bound. It stays constant across the pooled alternatives.
+    # Solve-level optimality gap: best objective vs Gurobi's dual bound. The
+    # metrics row recomputes a per-layout gap from lower_bound when the user
+    # selects a pooled alternative.
     best_obj = solutions[0]["obj"]
     lower_bound = dual if (dual is not None and dual != float("-inf")
                            and dual == dual) else None
@@ -785,37 +847,45 @@ def _connectivity(blocks, pairs):
 
 
 def _pipe_segments(block_i, block_j):
-    """Two-segment L whose total drawn length equals the modeled rectilinear
-    gap dx + dy: it connects the nearest edges, or runs along the shared
-    overlap mid-line on an axis where the blocks overlap (gap 0). So the pipe
-    drawn on screen is exactly as long as the pipe the objective costs. Width
-    is along x, length along y.
+    """Stylized elbow between two blocks, routed face-to-face rather than
+    corner-to-corner: the pipe leaves block i at the midline of the face
+    toward block j, runs to block j's center coordinate, and enters j through
+    the middle of a face. NOTE: unlike the rack tie-in lanes, the drawn
+    length here no longer equals the modeled gap dx + dy — the model costs
+    nearest-edge clearance, the drawing favors legibility.
 
-    Returns a list of two segments, each {"x", "y", "x2", "y2"}.
+    Returns a list of one or two segments, each {"x", "y", "x2", "y2"}.
     """
     xi, yi, wi, li = block_i["x"], block_i["y"], block_i["w"], block_i["l"]
     xj, yj, wj, lj = block_j["x"], block_j["y"], block_j["w"], block_j["l"]
+    cx_i, cy_i = xi + wi / 2, yi + li / 2
+    cx_j, cy_j = xj + wj / 2, yj + lj / 2
 
-    # Horizontal: connect the nearest x-edges, or the overlap mid-line (gap 0).
-    if xi + wi <= xj:                      # i left of j
-        src_x, dst_x = xi + wi, xj
-    elif xj + wj <= xi:                    # i right of j
-        src_x, dst_x = xi, xj + wj
-    else:                                  # x-overlap → no horizontal run
-        src_x = dst_x = (max(xi, xj) + min(xi + wi, xj + wj)) / 2
+    disjoint_x = (xi + wi <= xj) or (xj + wj <= xi)
 
-    # Vertical: connect the nearest y-edges, or the overlap mid-line.
-    if yi + li <= yj:                      # i below j
-        src_y, dst_y = yi + li, yj
-    elif yj + lj <= yi:                    # i above j
-        src_y, dst_y = yi, yj + lj
-    else:                                  # y-overlap → no vertical run
-        src_y = dst_y = (max(yi, yj) + min(yi + li, yj + lj)) / 2
+    if disjoint_x:
+        # Horizontal-first: leave i's facing side at its mid-height.
+        src_x = xi + wi if cx_j > cx_i else xi
+        if yj <= cy_i <= yj + lj:
+            # i's midline meets j's side directly — single straight run.
+            dst_x = xj if cx_j > cx_i else xj + wj
+            return [{"x": src_x, "y": cy_i, "x2": dst_x, "y2": cy_i}]
+        # Elbow: run to j's center x, then drop into j's near face.
+        dst_y = yj if cy_i < yj else yj + lj
+        return [
+            {"x": src_x, "y": cy_i, "x2": cx_j, "y2": cy_i},
+            {"x": cx_j, "y": cy_i, "x2": cx_j, "y2": dst_y},
+        ]
 
-    # L-shape: horizontal leg then vertical leg. Total length = dx + dy.
+    # Overlapping in x → they're disjoint in y. Vertical-first, symmetric.
+    src_y = yi + li if cy_j > cy_i else yi
+    if xj <= cx_i <= xj + wj:
+        dst_y = yj if cy_j > cy_i else yj + lj
+        return [{"x": cx_i, "y": src_y, "x2": cx_i, "y2": dst_y}]
+    dst_x = xj if cx_i < xj else xj + wj
     return [
-        {"x": src_x, "y": src_y, "x2": dst_x, "y2": src_y},
-        {"x": dst_x, "y": src_y, "x2": dst_x, "y2": dst_y},
+        {"x": cx_i, "y": src_y, "x2": cx_i, "y2": cy_j},
+        {"x": cx_i, "y": cy_j, "x2": dst_x, "y2": cy_j},
     ]
 
 
@@ -940,20 +1010,45 @@ def build_layout_chart(res):
                 direction = "North" if hdr["y"] > l_f / 2 else "South"
                 pair_label = f"{_block_label(obj_id)} → {direction}"
             else:
-                seg_a, seg_b = _pipe_segments(bi, bj)
+                uu_segs = _pipe_segments(bi, bj)
                 feeder_len = 0.0
                 pair_label = f"{_block_label(p['i'])}—{_block_label(p['j'])}"
                 obj_id = int(p["i"])
-            # Pipe takes its object's block color, so each line ties back to the
-            # object it serves (same index→color mapping as the block fill).
-            pipe_color = _PALETTE[(obj_id - 1) % len(_PALETTE)]
-            for seg in (seg_a, seg_b):
+            # Pipe takes its object's block color, so each line ties back to
+            # the object it serves (same index→color mapping as the block
+            # fill). Unit-to-unit pipes alternate the two endpoint colors in
+            # short dashes along the whole path, so the connection reads as
+            # belonging to both ends.
+            if bi.get("is_header") or bj.get("is_header"):
+                draw_segs = [(seg_a, _PALETTE[(obj_id - 1) % len(_PALETTE)]),
+                             (seg_b, _PALETTE[(obj_id - 1) % len(_PALETTE)])]
+            else:
+                color_i = _PALETTE[(int(p["i"]) - 1) % len(_PALETTE)]
+                color_j = _PALETTE[(int(p["j"]) - 1) % len(_PALETTE)]
+                DASH = 0.1           # dash length in layout units
+                draw_segs = []
+                k = 0                # running dash index across all legs
+                for seg in uu_segs:
+                    dx_s = seg["x2"] - seg["x"]
+                    dy_s = seg["y2"] - seg["y"]
+                    seg_len = abs(dx_s) + abs(dy_s)    # legs are axis-aligned
+                    n_dash = max(1, int(math.ceil(seg_len / DASH)))
+                    for m in range(n_dash):
+                        t0, t1 = m / n_dash, (m + 1) / n_dash
+                        piece = {"x": seg["x"] + t0 * dx_s,
+                                 "y": seg["y"] + t0 * dy_s,
+                                 "x2": seg["x"] + t1 * dx_s,
+                                 "y2": seg["y"] + t1 * dy_s}
+                        draw_segs.append(
+                            (piece, color_i if k % 2 == 0 else color_j))
+                        k += 1
+            for seg, seg_color in draw_segs:
                 pipe_rows.append({
                     **seg,
                     "c": p["c"],                       # per-unit pipe price
                     "length": p["dx"] + p["dy"],       # Manhattan pipe length
                     "pair": pair_label,
-                    "color": pipe_color,
+                    "color": seg_color,
                     "feeder_len": feeder_len,
                     "i_id": int(p["i"]),
                     "j_id": int(p["j"]),
@@ -1202,7 +1297,11 @@ def _render_object_editor(ss):
     # for the north/south tie-in. The editor pane is a touch wider (see
     # render_optimizer) so the number columns stay wide enough to keep their
     # +/- steppers; the fields themselves keep the original 6.5rem cap.
-    cols_spec = [0.5, 1.2, 1.2, 1.2, 0.5, 0.6]
+    # Delete column sized to hug the trash button (its content width), so the
+    # button's right edge sits at the pane edge; the freed width goes to the
+    # N/S arrows column. Total stays 5.2 so the Connections row below, which
+    # shares these boundaries, keeps its column alignment.
+    cols_spec = [0.5, 1.2, 1.2, 1.2, 0.5, 0.35]
 
     header = st.columns(cols_spec)
     header[1].markdown("**Length**")
@@ -1281,6 +1380,43 @@ def _render_object_editor(ss):
             changed = True
 
     if changed:
+        ss.pop("res", None)
+        st.rerun()
+
+    # Unit-to-unit connections: how many close-coupled pairs are active, and
+    # their pipe-cost multiplier relative to the rack tie-in range. Same
+    # stepper widgets as the object dimensions; ver-suffixed keys so Reset /
+    # Randomize re-seed the displayed values.
+    max_pairs = len(ss["all_pairs"])
+    # First three columns match the editor spec exactly (badge / Length /
+    # Width) so the label and first stepper align with the table. The tail
+    # deviates: even merged, the Pipe-to+delete widths (~115px) sit below the
+    # width where number inputs hide their +/- steppers, so the Cost × label
+    # gives up width to its stepper instead.
+    pcols = st.columns([0.5, 1.2, 1.2, 0.85, 1.2],
+                       vertical_alignment="center")
+    pcols[1].container(key="conn_label").markdown(
+        "**Connections**",
+        help="Number of direct unit-to-unit pipes (close-coupled equipment "
+             "pairs). Pairs are rolled by Randomize; raising the count "
+             "activates more of the rolled pairs.",
+    )
+    n_pairs = pcols[2].number_input(
+        "Connections", min_value=0, max_value=max(max_pairs, 0), step=1,
+        value=min(int(ss["n_pairs"]), max_pairs), key=f"npairs_{ver}",
+        label_visibility="collapsed",
+    )
+    pcols[3].container(key="pair_cost_label").markdown(
+        "**Cost**",
+        help="Pipe cost per unit distance for every unit-to-unit connection.",
+    )
+    pair_weight = pcols[4].number_input(
+        "Cost", min_value=PAIR_WEIGHT_MIN, max_value=PAIR_WEIGHT_MAX, step=1,
+        value=int(ss["pair_weight"]), key=f"pweight_{ver}",
+        label_visibility="collapsed",
+    )
+    if n_pairs != ss["n_pairs"] or pair_weight != ss["pair_weight"]:
+        ss["n_pairs"], ss["pair_weight"] = int(n_pairs), int(pair_weight)
         ss.pop("res", None)
         st.rerun()
 
@@ -1384,6 +1520,25 @@ def render_optimizer(ss):
         [data-testid="stNumberInputContainer"] {
             max-width: 6.5rem;
         }
+        /* Cost × stepper: right-aligned in its column, ending flush with the
+           pane edge. */
+        [class*="st-key-pweight"] [data-testid="stNumberInputContainer"] {
+            margin-left: auto;
+        }
+        /* Right-align the Cost × label (text + help icon) in its column so
+           its ? sits as close to its stepper as the Connections label's ?
+           sits to its own; the Connections label keeps its natural left
+           alignment under the Length column. The keyed container is a
+           column-flex block, so push its children to the right edge; the
+           inner rule right-aligns the text within the markdown block. */
+        [class*="st-key-pair_cost_label"] {
+            align-items: flex-end;
+        }
+        [class*="st-key-pair_cost_label"] [data-testid="stMarkdownContainer"] {
+            display: flex;
+            justify-content: flex-end;
+            text-align: right;
+        }
         /* Drop the on-hover chart chrome for a clean presentation view:
            Streamlit's element toolbar (fullscreen / show-data) and any
            remnant of Vega-Embed's "⋮" actions menu (also disabled via the
@@ -1467,6 +1622,10 @@ def _viz_panel(ss):
                                   ss["rotate"], 1, time_limit)
         spinner_slot.empty()
         ss["sol_sel"] = 0   # reset the layout selector to the best solution
+        # Full-app rerun (not just this fragment): the Logs tab and header
+        # metrics live outside the fragment and would otherwise keep showing
+        # the pre-solve state.
+        st.rerun(scope="app")
 
     res = ss.get("res")
 
@@ -1532,16 +1691,18 @@ def _viz_panel(ss):
     has = res is not None and res["status"] in ("optimal", "incumbent")
     if has:
         w_f = sel["plant"][1]
-        # Positions are integer in practice (integer dims + separation), so the
-        # objective, plant size, and piping cost are integers up to solver
-        # round-off — show them as whole numbers.
-        objv = f"{sel['obj']:.0f}"
-        plantW = f"{w_f:.0f}"
-        pipe = f"{sel['pipe_cost']:.0f}"
-        if res["status"] == "optimal":
-            gap = "0%"
-        elif res.get("gap") is not None:
-            gap = f"{res['gap'] * 100:.1f}%"
+        # Center-to-center distances put objective values on the half-integer
+        # grid, so show one decimal place.
+        objv = f"{sel['obj']:.1f}"
+        plantW = f"{w_f:.1f}"
+        pipe = f"{sel['pipe_cost']:.1f}"
+        # Gap of the SELECTED layout against the solve's dual bound, so
+        # switching pool solutions shows how far each one is from the proven
+        # bound (0% only for a proven-optimal layout).
+        lb = res.get("lower_bound")
+        if lb is not None and sel["obj"] > 0:
+            sel_gap = max(0.0, (sel["obj"] - lb) / abs(sel["obj"]))
+            gap = "0%" if sel_gap < 5e-4 else f"{sel_gap * 100:.1f}%"
         else:
             gap = "—"
         elapsed = res.get("elapsed")
@@ -1557,15 +1718,14 @@ def _viz_panel(ss):
 
 
 def render_formulation():
-    img_path = Path(__file__).parent / "images" / "formulation.png"
-
     st.markdown(r"""
 ### Layout Formulation
 
 Place $n$ rectangular objects so that the plant's bounding-box
-dimensions plus the cost-weighted Manhattan pipe distance from each object to
-its assigned north or south end of the rack are minimized. Width is the
-horizontal ($x$) axis, length the vertical ($y$):
+dimensions plus the cost-weighted Manhattan pipe distances are minimized.
+Each object pipes to its assigned north or south end of the rack, and
+selected pairs of objects additionally carry a direct unit-to-unit
+connection. Width is the horizontal ($x$) axis, length the vertical ($y$):
 
 $$\min \; \lambda \,(l_f + w_f) + \sum_{i,j \in N,\; j<i} c_{ij} \big( dx_{ij} + dy_{ij} \big)$$
 
@@ -1587,15 +1747,17 @@ Each non-rack object is assigned (as fixed instance data) to tie into the
 piping cost is the Manhattan distance to that end. This is modeled with two
 zero-length tie-in objects pinned to the rack's top and bottom, sharing the
 rack's $x$-span, at zero clearance, so the same distance and non-overlap
-machinery applies; the $c_{ij}$ above are then nonzero only between an object
-and its assigned end.
+machinery applies. The $c_{ij}$ above are nonzero between an object and its
+assigned end, and between the unit pairs given a direct connection (the
+**Connections** control), whose pipes carry the **Cost** per unit distance.
 
-The rectilinear edge gaps are defined by always-on constraints (outside the
-disjunction), one lower bound per axis direction:
+Distances are rectilinear **center-to-center** — the convention of the
+process-plant layout literature [1] — defined by always-on constraints
+(outside the disjunction), one lower bound per axis direction:
 
-$$dx_{ij} \ge x_i - (x_j + w_j), \quad dx_{ij} \ge x_j - (x_i + w_i)$$
+$$dx_{ij} \ge \big(x_i + \tfrac{w_i}{2}\big) - \big(x_j + \tfrac{w_j}{2}\big), \quad dx_{ij} \ge \big(x_j + \tfrac{w_j}{2}\big) - \big(x_i + \tfrac{w_i}{2}\big)$$
 
-$$dy_{ij} \ge y_i - (y_j + l_j), \quad dy_{ij} \ge y_j - (y_i + l_i)$$
+$$dy_{ij} \ge \big(y_i + \tfrac{l_i}{2}\big) - \big(y_j + \tfrac{l_j}{2}\big), \quad dy_{ij} \ge \big(y_j + \tfrac{l_j}{2}\big) - \big(y_i + \tfrac{l_i}{2}\big)$$
 
 All decision variables are nonnegative ($x_i, y_i, l_i, w_i, l_f, w_f,
 dx_{ij}, dy_{ij} \ge 0$). Positions also have worst-case upper bounds
@@ -1610,9 +1772,9 @@ For every pair $(i, j)$ with $j < i$, one of the four separations must
 hold, with the minimum clearance $d_{ij}$ built in:
 
 $$
-\begin{bmatrix} Y_{ij}^1 \\ x_i + w_i + d_{ij} \le x_j \\ y_i + l_i \ge y_j - (d_{ij}-1) \\ y_j + l_j \ge y_i - (d_{ij}-1) \end{bmatrix}
+\begin{bmatrix} Y_{ij}^1 \\ x_i + w_i + d_{ij} \le x_j \\ y_i + l_i \ge y_j - d_{ij} \\ y_j + l_j \ge y_i - d_{ij} \end{bmatrix}
 \lor
-\begin{bmatrix} Y_{ij}^2 \\ x_j + w_j + d_{ij} \le x_i \\ y_i + l_i \ge y_j - (d_{ij}-1) \\ y_j + l_j \ge y_i - (d_{ij}-1) \end{bmatrix}
+\begin{bmatrix} Y_{ij}^2 \\ x_j + w_j + d_{ij} \le x_i \\ y_i + l_i \ge y_j - d_{ij} \\ y_j + l_j \ge y_i - d_{ij} \end{bmatrix}
 \lor
 \begin{bmatrix} Y_{ij}^3 \\ y_i + l_i + d_{ij} \le y_j \end{bmatrix}
 \lor
@@ -1621,15 +1783,17 @@ $$
 
 ($k=1$ left, $2$ right, $3$ below, $4$ above.)
 
-The left/right disjuncts ($Y^1, Y^2$) carry two extra inequalities that
-force the two blocks to overlap vertically within $d_{ij}-1$. This is a
-**degeneracy breaking constraint** (the $d$-aware form of Trespalacios &
-Grossmann [5]).
-Without it, a pair separated on *both* axes could be encoded as left/right
-**or** above/below, so one physical layout has several encodings that
-branch-and-bound re-explores. Forcing vertical overlap routes those pairs
-uniquely through above/below, giving one encoding per layout. It is
-optimum-preserving and valid because $d_{ij}$ is integer.
+The left/right disjuncts ($Y^1, Y^2$) carry two extra inequalities forcing
+the blocks to overlap vertically within $d_{ij}$ — a **degeneracy breaking
+constraint** (a $d$-aware variant of Trespalacios & Grossmann [5]). Without
+it, a pair separated on *both* axes could be encoded as left/right **or**
+above/below, so one physical layout has several encodings that
+branch-and-bound re-explores and that fill the solution pool with
+duplicates. The offset is $-d_{ij}$ rather than the tighter $-(d_{ij}-1)$:
+the tighter form is only optimum-preserving when an integer-optimal layout
+is guaranteed, which center-to-center distances do not provide for
+odd-dimensioned objects. The $-d_{ij}$ form is optimum-preserving for
+arbitrary continuous coordinates.
 
 When rotation is enabled, each block additionally chooses orientation:
 
@@ -1639,13 +1803,6 @@ $$
 \begin{bmatrix} Y_i^6 \\ l_i = w_i^0 \\ w_i = l_i^0 \end{bmatrix}
 $$
 """)
-
-    if img_path.exists():
-        # Half-width column so the high-res PNG downscales and stays crisp.
-        _img_col, _ = st.columns(2)
-        with _img_col:
-            st.image(str(img_path), use_container_width=True,
-                     caption="Nonoverlap disjunction, i is left of j, when dyᵢⱼ < dᵢⱼ")
 
     st.markdown(r"""
 ### Symmetry breaking
@@ -1664,10 +1821,9 @@ assignment it would wrongly exclude valid layouts.
 
 We reformulate the GDP into a MILP with the **Big-M** transformation (one
 indicator per disjunct with a big constant), then solve it with **Gurobi**.
-With the single-inequality disjuncts above, Big-M keeps the model compact.
-The Hull (convex-hull) transformation was benchmarked too, but it
-disaggregates every variable per disjunct, inflating the model for a tighter
-relaxation that doesn't pay off here.
+Big-M keeps the model compact. The Hull (convex-hull) transformation was
+benchmarked too, but it disaggregates every variable per disjunct, inflating
+the model for a tighter relaxation that doesn't pay off here.
 
 For larger instances (n > 8) the MIP can exceed the wall-clock time limit.
 The app then loads the **best feasible incumbent** found before the cutoff
@@ -1678,10 +1834,10 @@ Many near-optimal layouts usually exist, and an engineer may prefer one over
 another for reasons the model doesn't capture. After solving, the app asks
 Gurobi's **solution pool** for its best feasible layouts and offers several
 as selectable alternatives. The degeneracy breaking constraint above is what
-makes these genuinely distinct *layouts* rather than duplicate encodings of
-one. From the pool the app greedily selects a spread of layouts. Each new one
-maximizes, against those already chosen, the number of block pairs that take
-a different spatial relation. The lowest-cost layout stays the default.
+keeps these genuinely distinct *layouts* rather than duplicate encodings of
+one. From the pool the app greedily selects a spread of layouts: each new
+one maximizes, against those already chosen, the number of block pairs that
+take a different spatial relation. The lowest-cost layout stays the default.
 
 ### References
 
@@ -1750,12 +1906,13 @@ _caption_col, _ = st.columns([6, 3])
 with _caption_col:
     st.markdown(
         "A pipe **rack** spans the plant; place unit ops on either side of "
-        "it to minimize piping cost to the north and south sides of the pipe "
-        "rack. Edit the objects, set the options, and click **Solve**. If the "
-        "time limit is reached, the best incumbent solution will be returned, "
-        "as well as up to four other maximally different solutions from "
-        "Gurobi's solution pool. For reference, the optimal objective for the "
-        "default instance is 98."
+        "it to minimize piping cost to the pipe rack as well as unit-to-unit "
+        "connections. Edit the objects, set "
+        "the options, and click **Solve**. If the time limit is reached, the "
+        "best incumbent solution will be returned, as well as up to four "
+        "other maximally different solutions from Gurobi's solution pool. "
+        "For reference, the optimal objective for the default instance is "
+        "255.5."
     )
 
 # ---- Tabs ----
