@@ -1891,7 +1891,7 @@ ss = st.session_state
 st.markdown(
     "<h2 style='margin: 0 0 0.25rem 0; padding: 0; font-size: 1.5rem; font-weight: 700;'>"
     "Plant Layout GDP Optimizer "
-    "<a href='https://github.com/devin-griff/plant_layout' target='_blank' "
+    "<a href='https://github.com/devin-griff/plant-layout' target='_blank' "
     "title='View source on GitHub' "
     "style='display: inline-block; vertical-align: 0.02em; margin: 0 0.35rem 0 0.1rem; "
     "color: inherit;'>"
