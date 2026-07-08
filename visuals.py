@@ -71,7 +71,7 @@ def rect_table(m, decimals=2, styled=True, zero_tol=1e-12):
     st = (
         df.style
         # Always show decimals, including zeros:
-        .format({c: fmt.format for c in numeric_cols}, na_rep="—")
+        .format({c: fmt.format for c in numeric_cols}, na_rep="-")
         .set_caption("Optimal Rectangle Layout")
         .set_table_styles([
             {"selector": "caption","props":[("text-align","left"),("font-size","16px"),

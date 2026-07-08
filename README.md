@@ -1,6 +1,6 @@
 # Plant Layout
 
-Process plant layout via GDP — minimize plant size + pipe costs
+Process plant layout via GDP: minimize plant size + pipe costs
 
 **Live demo:** https://plant-layout.griffith-pse.com  
 **Home:** https://griffith-pse.com
@@ -22,12 +22,12 @@ auto-stop machines. Custom domain wired through Cloudflare DNS.
 
 ## Files
 
-- `app.py` — Streamlit UI and computation
-- `requirements.txt` — Python deps
-- `favicon.png` — Griffith PSE blackletter G favicon
-- `Dockerfile`, `fly.toml`, `.dockerignore` — Fly.io production image config
-- `.streamlit/config.toml` — Streamlit defaults baked into the image
-- `.github/workflows/deploy.yml` — auto-deploy pipeline
+- `app.py`: Streamlit UI and computation
+- `requirements.txt`: Python deps
+- `favicon.png`: Griffith PSE blackletter G favicon
+- `Dockerfile`, `fly.toml`, `.dockerignore`: Fly.io production image config
+- `.streamlit/config.toml`: Streamlit defaults baked into the image
+- `.github/workflows/deploy.yml`: auto-deploy pipeline
 
 ## References
 
@@ -47,6 +47,6 @@ Engineering*, vol. 29, no. 9, pp. 1891–1913, 2005.
 [ScienceDirect](https://www.sciencedirect.com/science/article/abs/pii/S0098135405000992)
 
 [4] M. L. Bynum, G. A. Hackebeil, W. E. Hart, C. D. Laird, B. L. Nicholson,
-J. D. Siirola, J.-P. Watson, and D. L. Woodruff, *Pyomo — Optimization Modeling
+J. D. Siirola, J.-P. Watson, and D. L. Woodruff, *Pyomo: Optimization Modeling
 in Python*, 3rd ed. Cham: Springer, 2021.
 [Springer](https://link.springer.com/book/10.1007/978-3-030-68928-5)

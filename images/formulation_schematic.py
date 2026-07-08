@@ -1,7 +1,7 @@
 """Regenerates the Formulation-tab schematic (formulation.png).
 
 Illustrates disjunct Y^1 ("i is left of j") of the decoupled model: two
-blocks with the rectilinear edge gaps labeled — dx_{i,j} horizontal,
+blocks with the rectilinear edge gaps labeled: dx_{i,j} horizontal,
 dy_{i,j} vertical. Keep this in sync with the model in app.py; re-run after
 any notation change so the image never goes stale again.
 
@@ -88,5 +88,5 @@ try:
         if hits:
             nbformat.write(nb, str(nb_path))
             print(f"re-embedded into {nb_path.name} ({hits} cell)")
-except Exception as e:  # nbformat missing or notebook unreadable — non-fatal
+except Exception as e:  # nbformat missing or notebook unreadable: non-fatal
     print("notebook embed skipped:", e)

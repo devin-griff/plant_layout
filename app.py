@@ -1,5 +1,5 @@
 # =============================================================================
-# Plant Layout Optimizer — a Streamlit tutorial app.
+# Plant Layout Optimizer: a Streamlit tutorial app.
 #
 # Process plant layout problem solved via Pyomo GDP. Place rectangular
 # blocks in 2D space to minimize:
@@ -8,17 +8,17 @@
 #                                       (Σ c_ij · (t_ij + s_ij))
 #
 # Library roadmap:
-#   - streamlit  — UI framework. Each interaction reruns this script
+#   - streamlit : UI framework. Each interaction reruns this script
 #                  top-to-bottom; persistent values live in `st.session_state`.
-#   - pyomo      — algebraic modeling, including the `pyomo.gdp` submodule
+#   - pyomo     : algebraic modeling, including the `pyomo.gdp` submodule
 #                  for native Disjunction blocks.
-#   - Gurobi     — MIP solver, called via Pyomo's native appsi Gurobi
+#   - Gurobi    : MIP solver, called via Pyomo's native appsi Gurobi
 #                  interface. Ships as a pip wheel (`gurobipy`); needs a
 #                  Gurobi license (WLS in production via Fly secrets, or a
 #                  local license file pointed to by GRB_LICENSE_FILE).
-#   - pandas     — DataFrames for the editable block-dimensions and
+#   - pandas    : DataFrames for the editable block-dimensions and
 #                  cost-matrix tables.
-#   - altair     — interactive layout figure (rectangles + pipe lines +
+#   - altair    : interactive layout figure (rectangles + pipe lines +
 #                  hover tooltips).
 #
 # Model structure:
@@ -30,7 +30,7 @@
 #   Pipe distances are rectilinear center-to-center (the literature
 #   convention), computed by always-on dx/dy constraints kept OUT of the
 #   disjunction so the objective never depends on which spatial relation is
-#   chosen — this avoids the costly continuous degeneracy that coupling
+#   chosen: this avoids the costly continuous degeneracy that coupling
 #   distance into the disjuncts would create.
 #
 # Symmetry breaking:
@@ -48,11 +48,11 @@
 # File roadmap (matching section banners below):
 #   1. Page config + CSS + home-logo.
 #   2. Constants and defaults.
-#   3. State helpers — object-list model, add/delete, reset, randomize.
-#   4. Solver — build_model + log-capturing solve + incumbent loader.
-#   5. Visualization — Altair layout figure with rectangles + pipe overlay.
-#   6. Tab renderers — Layout, Data, Formulation, Logs.
-#   7. Main — sidebar widgets + tab assembly.
+#   3. State helpers: object-list model, add/delete, reset, randomize.
+#   4. Solver: build_model + log-capturing solve + incumbent loader.
+#   5. Visualization: Altair layout figure with rectangles + pipe overlay.
+#   6. Tab renderers: Layout, Data, Formulation, Logs.
+#   7. Main: sidebar widgets + tab assembly.
 # =============================================================================
 
 import base64
@@ -75,11 +75,11 @@ from pyomo.opt import TerminationCondition
 
 def _materialize_gurobi_license():
     """Production license shim. Fly secrets surface as environment
-    variables, but gurobipy wants a license FILE — so if the three WLS
+    variables, but gurobipy wants a license FILE: so if the three WLS
     values are present and no license file is configured, write one to
     the home directory and point GRB_LICENSE_FILE at it. Local dev is
     untouched: there GRB_LICENSE_FILE already points at a file on disk.
-    The values never enter the repo or image — only Fly's secret store
+    The values never enter the repo or image: only Fly's secret store
     and the container's private filesystem."""
     if os.environ.get("GRB_LICENSE_FILE"):
         return
@@ -110,7 +110,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# Fixed-corner home logo (no sidebar — all controls are inline on the
+# Fixed-corner home logo (no sidebar: all controls are inline on the
 # Optimizer tab).
 _FAVICON_DATA_URL = "data:image/png;base64," + base64.b64encode(
     (Path(__file__).parent / "favicon.png").read_bytes()
@@ -138,7 +138,7 @@ st.markdown(
     """
     f'<a href="https://griffith-pse.com" target="_self" '
     f'class="home-logo-corner">'
-    f'<img src="{_FAVICON_DATA_URL}" alt="Griffith PSE — home" />'
+    f'<img src="{_FAVICON_DATA_URL}" alt="Griffith PSE: home" />'
     f"</a>",
     unsafe_allow_html=True,
 )
@@ -161,7 +161,7 @@ FOOTPRINT_WEIGHT = 1.0
 
 # The rack (object 1) spans the plant length: fixed long-and-thin dims, and
 # always the longest object so every instance stays feasible. Reset and
-# Randomize both keep these — only the other objects' dims/costs change.
+# Randomize both keep these: only the other objects' dims/costs change.
 RACK_LEN, RACK_WID = 9, 1
 DEFAULT_N = 15             # objects present on first load / after Reset
 
@@ -184,14 +184,14 @@ _TIME_LIMITS = {"10 s": 10, "30 s": 30, "60 s": 60}
 # physical layouts rather than duplicate indicator encodings of one layout.
 POOL_SIZE = 40      # candidates pulled from Gurobi's pool before diverse pick.
                     # PoolSearchMode=2 keeps the n BEST solutions, which
-                    # cluster around similar geometry — a larger pool retains
+                    # cluster around similar geometry: a larger pool retains
                     # the worse-but-different layouts the diverse pick needs.
 MAX_SOLUTIONS = 5   # distinct layouts shown in the selector
 
 # RNG seed for Randomize; bumped each click for a fresh instance.
 DEFAULT_SEED = 1
 
-# Categorical palette — each object's index drives BOTH its editor badge color
+# Categorical palette: each object's index drives BOTH its editor badge color
 # and its block fill in the layout, so the two views stay visually linked
 # (object 1, the rack, gets the first color).
 # At least MAX_OBJECTS distinct colors so no two objects ever share one (the
@@ -347,8 +347,8 @@ def _objs_to_inputs(ss):
     Two implicit tie-in headers are appended after the user objects: a north
     header (index nu+1) and a south header (nu+2), each zero length and the
     rack's width, which build_model pins to the rack's top and bottom ends. Each
-    non-rack object's pipe cost goes to its assigned header — north or south per
-    the instance data — rather than to the main rack, whose column stays zero."""
+    non-rack object's pipe cost goes to its assigned header: north or south per
+    the instance data: rather than to the main rack, whose column stays zero."""
     objs = ss["objs"]
     nu = len(objs)
     north, south = nu + 1, nu + 2
@@ -464,10 +464,10 @@ def build_model(n, l0, w0, cmat, d_uniform, rotate, sym):
 
     # Rectilinear center-to-center distances, defined GLOBALLY (not inside the
     # disjunction): dx_ij >= |center_x(i) - center_x(j)| and dy_ij the same in
-    # y — the literature-standard distance convention. They're minimized in
+    # y: the literature-standard distance convention. They're minimized in
     # the objective, so each settles to the true center distance. Keeping them
     # out of the disjuncts makes the objective independent of which spatial
-    # relation is chosen — the disjunction below decides only non-overlap.
+    # relation is chosen: the disjunction below decides only non-overlap.
     @m.Constraint(m.p)
     def dx_lb_a(m, i, j):
         return m.dx[i, j] >= (m.x[i] + m.w[i] / 2) - (m.x[j] + m.w[j] / 2)
@@ -487,7 +487,7 @@ def build_model(n, l0, w0, cmat, d_uniform, rotate, sym):
     # Symmetry breaking: anchor block 1 left-of block 2's center, killing the
     # left/right mirror. Only the horizontal mirror is a symmetry here: the
     # top/bottom mirror is NOT, because flipping y would swap each object's
-    # north/south tie-in, so the old vertical cut (rack-below-block-2) is gone —
+    # north/south tie-in, so the old vertical cut (rack-below-block-2) is gone -
     # it would have wrongly forced block 2 into the upper half.
     if sym == 1:
         @m.Constraint()
@@ -509,7 +509,7 @@ def build_model(n, l0, w0, cmat, d_uniform, rotate, sym):
     # Degeneracy breaking constraint (d-aware Trespalacios & Grossmann,
     # continuous-valid form): the left/right disjuncts additionally require
     # the blocks to overlap vertically within d, so a pair with vertical gap
-    # > d can only route through above/below — one encoding per physical
+    # > d can only route through above/below: one encoding per physical
     # layout, keeping the solution pool free of duplicate encodings. The
     # offset must be -d, not the tighter -(d-1): the d-1 form is only
     # optimum-preserving when an integer-optimal layout is guaranteed, which
@@ -527,7 +527,7 @@ def build_model(n, l0, w0, cmat, d_uniform, rotate, sym):
             [m.y[j] + m.l[j] + m.d[i, j] <= m.y[i]],         # i above j
         ]
 
-    # Rotation GDP (optional): 2-way disjunction per block — EXCEPT block 1
+    # Rotation GDP (optional): 2-way disjunction per block: EXCEPT block 1
     # (the rack), which keeps a fixed orientation even when rotation is on.
     # Fixing the rack is optimum-preserving: it only canonicalizes the
     # layout's overall orientation (the transpose symmetry), and every other
@@ -568,7 +568,7 @@ def build_model(n, l0, w0, cmat, d_uniform, rotate, sym):
 
 
 class _LicenseBusyError(RuntimeError):
-    """Raised when Gurobi's WLS checkout fails even after a retry —
+    """Raised when Gurobi's WLS checkout fails even after a retry -
     typically the license's concurrent-session seats are all taken.
     solve() maps this onto the `license_busy` status."""
 
@@ -596,7 +596,7 @@ def _run_gurobi(m, time_limit, extract_fn, pool_size):
     opt.gurobi_options['PoolSearchMode'] = 2          # find the n best
     opt.gurobi_options['PoolSolutions'] = int(pool_size)
     # MIPFocus=1 (feasibility focus): the app's short time limits reward
-    # finding many good incumbents — that's what fills the solution pool the
+    # finding many good incumbents: that's what fills the solution pool the
     # layout selector depends on. Bound-focused settings prove faster but
     # find few incumbents along the way, starving the pool.
     opt.gurobi_options['MIPFocus'] = 1
@@ -682,7 +682,7 @@ def _relation_vector(blocks):
     """The spatial relation each block pair takes (left / right / below /
     above), as a tuple over all pairs, derived from positions. Two layouts that
     route many pairs differently are structurally different even at a similar
-    cost — so the count of differing entries is a translation-invariant
+    cost: so the count of differing entries is a translation-invariant
     'how different are these two layouts' distance."""
     bs = {b["i"]: b for b in blocks}
     ids = sorted(bs)
@@ -799,7 +799,7 @@ def solve(n, l0, w0, cmat, d_uniform, rotate, sym, time_limit):
     solutions.sort(key=lambda s: s["obj"])
 
     if not solutions:
-        # Termination says feasible but nothing came back — treat as no usable
+        # Termination says feasible but nothing came back: treat as no usable
         # layout rather than crash the UI.
         return {"status": "no_feasible", "log": log}
 
@@ -833,7 +833,7 @@ def solve(n, l0, w0, cmat, d_uniform, rotate, sym, time_limit):
 # feeds the block tooltip and the hover-to-highlight adjacency.
 def _connectivity(blocks, pairs):
     """Per-block realized piping cost: each pipe touching a block contributes
-    its cost-weighted rectilinear distance c·(dx+dy) — the same quantity summed
+    its cost-weighted rectilinear distance c·(dx+dy): the same quantity summed
     into 'Total piping cost'. So an object shows its own pipe's cost and the
     rack (touched by every pipe) shows the grand total. The coefficient c alone
     isn't a cost; it ignores distance. (Preview pairs carry no dx/dy and have
@@ -851,7 +851,7 @@ def _pipe_segments(block_i, block_j):
     corner-to-corner: the pipe leaves block i at the midline of the face
     toward block j, runs to block j's center coordinate, and enters j through
     the middle of a face. NOTE: unlike the rack tie-in lanes, the drawn
-    length here no longer equals the modeled gap dx + dy — the model costs
+    length here no longer equals the modeled gap dx + dy: the model costs
     nearest-edge clearance, the drawing favors legibility.
 
     Returns a list of one or two segments, each {"x", "y", "x2", "y2"}.
@@ -867,7 +867,7 @@ def _pipe_segments(block_i, block_j):
         # Horizontal-first: leave i's facing side at its mid-height.
         src_x = xi + wi if cx_j > cx_i else xi
         if yj <= cy_i <= yj + lj:
-            # i's midline meets j's side directly — single straight run.
+            # i's midline meets j's side directly: single straight run.
             dst_x = xj if cx_j > cx_i else xj + wj
             return [{"x": src_x, "y": cy_i, "x2": dst_x, "y2": cy_i}]
         # Elbow: run to j's center x, then drop into j's near face.
@@ -894,14 +894,14 @@ def build_layout_chart(res):
 
     Layers (back-to-front):
       1. Outer plant bounding box (dashed)
-      2. Pipe overlay — L-shaped paths via edge-port routing, opacity ∝ c_ij,
+      2. Pipe overlay: L-shaped paths via edge-port routing, opacity ∝ c_ij,
          linked-hover dims non-hovered pipes
       3. Block rectangles (fill = connectivity), border highlights orange
          when a pipe connecting this block is hovered
       4. Block-id labels at centers
 
     Width is the horizontal (x) axis and length the vertical (y) axis, matching
-    the formulation — so the rack, spanning the fixed length, renders
+    the formulation: so the rack, spanning the fixed length, renders
     vertically while the variable width grows horizontally (a wide layout).
     """
     blocks = res["blocks"]
@@ -911,7 +911,7 @@ def build_layout_chart(res):
     conn = _connectivity(blocks, pairs)
     blocks_by_id = {b["i"]: b for b in blocks}
 
-    # Adjacency map — for each block, the set of other blocks it's connected
+    # Adjacency map: for each block, the set of other blocks it's connected
     # to via a non-zero-cost pipe. Embedded in df_blocks as a comma-delimited
     # string (",2,3,5,") so the linked block-hover expression can test
     # membership via `indexof(...)` in Vega.
@@ -942,7 +942,7 @@ def build_layout_chart(res):
                   else _PALETTE[(int(b["i"]) - 1) % len(_PALETTE)]),
     } for b in blocks if not b.get("is_header")])
 
-    # Pipe dataframe — each pipe is an L drawn as two segments: a horizontal
+    # Pipe dataframe: each pipe is an L drawn as two segments: a horizontal
     # feeder from the object's vertical centre to that object's own lane inside
     # the rack, then a vertical run along the lane to its north/south end. The
     # per-object lanes fan the vertical runs across the rack's width so they read
@@ -1012,7 +1012,7 @@ def build_layout_chart(res):
             else:
                 uu_segs = _pipe_segments(bi, bj)
                 feeder_len = 0.0
-                pair_label = f"{_block_label(p['i'])}—{_block_label(p['j'])}"
+                pair_label = f"{_block_label(p['i'])}-{_block_label(p['j'])}"
                 obj_id = int(p["i"])
             # Pipe takes its object's block color, so each line ties back to
             # the object it serves (same index→color mapping as the block
@@ -1073,7 +1073,7 @@ def build_layout_chart(res):
     # Equal-aspect sizing: identical pixels-per-unit on both axes, so the
     # layout is geometrically faithful and the integer ticks read as an even
     # square grid. Scale to the largest size fitting within BOTH a width and a
-    # height cap — width fills the wide viz column for the usual wide-and-short
+    # height cap: width fills the wide viz column for the usual wide-and-short
     # layout, while the height cap stops a tall, narrow instance from blowing
     # up vertically. A single scale factor keeps squares square.
     _x_span = (x_dom[1] - x_dom[0]) or 1.0
@@ -1091,14 +1091,14 @@ def build_layout_chart(res):
     # the same set of conditional expressions on each layer, so hovering
     # either a pipe OR a block produces the matched highlight pattern.
     #
-    # `empty=True` is harmless here — we drive everything from explicit
+    # `empty=True` is harmless here: we drive everything from explicit
     # `length(... || []) > 0` checks in the expressions below, so the
     # `empty` interpretation never affects the visible result.
     #
     # `nearest=False` (omitted) means the cursor must be directly on the
     # mark to trigger selection. No snap-from-afar.
     # The block-hover selection is always present. The pipe-hover selection
-    # and its expressions exist only when there ARE pipes — otherwise the
+    # and its expressions exist only when there ARE pipes: otherwise the
     # stroke expression would reference a selection that was never added,
     # which breaks Vega rendering (the unsolved preview, or any all-zero-cost
     # instance, hits this).
@@ -1149,7 +1149,7 @@ def build_layout_chart(res):
         y2="y2:Q",
     )
 
-    # Block rectangles — stroke color/width are conditional on either the
+    # Block rectangles: stroke color/width are conditional on either the
     # pipe-hover or the block-hover selection. The block layer hosts the
     # block_hover param; the expression also references the pipe `hover`
     # selection (which lives on the pipe layer) so a single pipe-hover
@@ -1185,7 +1185,7 @@ def build_layout_chart(res):
         angle=alt.Angle("angle:Q", scale=None),   # raw degrees, no scaling
     )
 
-    # Pipe overlay — two co-located layers. The visible layer is a thin
+    # Pipe overlay: two co-located layers. The visible layer is a thin
     # color rule with size proportional to pipe cost; the hit-target is a
     # transparent wider rule that captures the hover event and shows the
     # tooltip. Decoupling them lets us keep pipes visually thin while
@@ -1249,7 +1249,7 @@ def build_layout_chart(res):
         .properties(
             width=_w_px, height=_h_px,
             # Disable Vega-Embed's "⋮" actions menu (Save / View Source /
-            # Open in Vega Editor) — vega-embed reads embed options from the
+            # Open in Vega Editor): vega-embed reads embed options from the
             # spec's usermeta. The Streamlit element toolbar (fullscreen /
             # show-data) is hidden via CSS in render_optimizer.
             usermeta={"embedOptions": {"actions": False}},
@@ -1263,7 +1263,7 @@ def build_layout_chart(res):
 # ── 6. Tab renderers ─────────────────────────────────────────────────────────
 
 def _render_metric(slot, label, value):
-    """Metric-shaped block via raw HTML — small gray label, large value.
+    """Metric-shaped block via raw HTML: small gray label, large value.
     The five top-row metrics read consistently."""
     slot.markdown(
         "<div style='margin:0.25rem 0 1.3rem 0; line-height:1.2;'>"
@@ -1288,7 +1288,7 @@ def _keep_side_selected(key, oid):
 def _render_object_editor(ss):
     """Inline object editor (left column of the Optimizer tab): one row per
     object with Length / Width / pipe-cost-to-rack steppers. Object 1 is the
-    rack — fixed in the list, no pipe-cost cell, not deletable. Add / Reset /
+    rack: fixed in the list, no pipe-cost cell, not deletable. Add / Reset /
     Randomize below."""
     st.markdown(f"#### Objects (max {MAX_OBJECTS})")
 
@@ -1313,7 +1313,7 @@ def _render_object_editor(ss):
     n = len(objs)
     changed = False
     # Fixed slot count (constant element count avoids the delete ghost-row
-    # flash — same reasoning as strip-packing / circle-packing).
+    # flash: same reasoning as strip-packing / circle-packing).
     for slot in range(MAX_OBJECTS):
         if slot >= n:
             st.empty()
@@ -1325,7 +1325,7 @@ def _render_object_editor(ss):
         c = st.columns(cols_spec, vertical_alignment="center")
         # Colored badge: the rack reads "rack" (a wider pill); the others are
         # numbered from 1. Color keys off the block index so the badge always
-        # matches that object's fill in the layout — including the rack, which
+        # matches that object's fill in the layout: including the rack, which
         # is drawn white (so it needs dark text and a border to stay legible).
         _badge_w = "padding:0 0.45rem;" if is_rack else "width:1.6rem;"
         _badge_bg = "#ffffff" if is_rack else color
@@ -1515,7 +1515,7 @@ def render_optimizer(ss):
             caret-color: transparent;
         }
         /* Cap the field width so the value sits next to the +/- buttons
-           instead of stretching across the column — compact rows, while
+           instead of stretching across the column: compact rows, while
            still wide enough that the steppers stay visible. */
         [data-testid="stNumberInputContainer"] {
             max-width: 6.5rem;
@@ -1565,12 +1565,12 @@ def render_optimizer(ss):
 
 @st.fragment
 def _viz_panel(ss):
-    """Result panel — controls, layout selector, chart, metrics — isolated in a
+    """Result panel: controls, layout selector, chart, metrics: isolated in a
     fragment. The Solve/option controls and the layout selector live here, so
     interacting with any of them re-renders only this panel, not the object
     editor or the Formulation/Logs tabs. All pooled layouts are already computed
     and cached in session_state, so switching the selector just redraws the
-    chart — no re-solve and no full-app rerun."""
+    chart: no re-solve and no full-app rerun."""
     # Everything in one row (strip-packing layout): Solve / Min distance /
     # Rotation / Time limit, then the five metric slots. The layout paints
     # below through a placeholder so the controls commit before we draw.
@@ -1602,7 +1602,7 @@ def _viz_panel(ss):
     # blanking and repainting them.
     # Spacer so the plot sits a little below the controls/metrics row.
     st.markdown("<div style='height:1.5rem'></div>", unsafe_allow_html=True)
-    # Layout selector — filled later, only when a solve returned more than
+    # Layout selector: filled later, only when a solve returned more than
     # one distinct layout. Sits directly above the plot, below the controls.
     toggle_slot = st.empty()
     viz_slot = st.empty()
@@ -1635,7 +1635,7 @@ def _viz_panel(ss):
 
     # Layout selector: a toggle directly above the plot, below the time-limit
     # row. Shown only when the pool returned more than one distinct layout.
-    # Switching it re-renders the chosen layout — it never re-solves.
+    # Switching it re-renders the chosen layout: it never re-solves.
     sel_idx = 0
     if sols and len(sols) > 1:
         with toggle_slot.container():
@@ -1657,7 +1657,7 @@ def _viz_panel(ss):
     else:
         # No selector to show (preview or a single layout). Reserve its vertical
         # space so the plot stays at the same height as when the selector is
-        # present — no jump between the unsolved preview and a solved result.
+        # present: no jump between the unsolved preview and a solved result.
         toggle_slot.markdown(
             "<div style='height:3.25rem'></div>", unsafe_allow_html=True
         )
@@ -1704,11 +1704,11 @@ def _viz_panel(ss):
             sel_gap = max(0.0, (sel["obj"] - lb) / abs(sel["obj"]))
             gap = "0%" if sel_gap < 5e-4 else f"{sel_gap * 100:.1f}%"
         else:
-            gap = "—"
+            gap = "-"
         elapsed = res.get("elapsed")
-        tstr = f"{elapsed:.1f}s" if elapsed is not None else "—"
+        tstr = f"{elapsed:.1f}s" if elapsed is not None else "-"
     else:
-        objv = plantW = pipe = gap = tstr = "—"
+        objv = plantW = pipe = gap = tstr = "-"
 
     _render_metric(top[4], "Objective", objv)
     _render_metric(top[5], "Plant width", plantW)
@@ -1751,8 +1751,8 @@ machinery applies. The $c_{ij}$ above are nonzero between an object and its
 assigned end, and between the unit pairs given a direct connection (the
 **Connections** control), whose pipes carry the **Cost** per unit distance.
 
-Distances are rectilinear **center-to-center** — the convention of the
-process-plant layout literature [1] — defined by always-on constraints
+Distances are rectilinear **center-to-center**: the convention of the
+process-plant layout literature [1]: defined by always-on constraints
 (outside the disjunction), one lower bound per axis direction:
 
 $$dx_{ij} \ge \big(x_i + \tfrac{w_i}{2}\big) - \big(x_j + \tfrac{w_j}{2}\big), \quad dx_{ij} \ge \big(x_j + \tfrac{w_j}{2}\big) - \big(x_i + \tfrac{w_i}{2}\big)$$
@@ -1784,7 +1784,7 @@ $$
 ($k=1$ left, $2$ right, $3$ below, $4$ above.)
 
 The left/right disjuncts ($Y^1, Y^2$) carry two extra inequalities forcing
-the blocks to overlap vertically within $d_{ij}$ — a **degeneracy breaking
+the blocks to overlap vertically within $d_{ij}$: a **degeneracy breaking
 constraint** (a $d$-aware variant of Trespalacios & Grossmann [5]). Without
 it, a pair separated on *both* axes could be encoded as left/right **or**
 above/below, so one physical layout has several encodings that
