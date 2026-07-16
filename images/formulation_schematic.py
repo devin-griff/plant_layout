@@ -9,9 +9,10 @@ stale again.
 
     python formulation_schematic.py    # writes formulation.png next to this file
 
-The formulation notebook ("plant layout.ipynb") embeds a base64 *copy* as a
-cell attachment so it renders when downloaded standalone; this script
-re-embeds it automatically (needs nbformat installed).
+The formulation notebook ("plant layout.ipynb") references this PNG by
+relative path (images/formulation.png), which GitHub's notebook preview
+renders; cell attachments do not. No re-embedding needed: the notebook
+picks up a regenerated PNG automatically.
 """
 from pathlib import Path
 
@@ -73,28 +74,3 @@ ax.axis("off")
 out = Path(__file__).parent / "formulation.png"
 fig.savefig(out, dpi=220, bbox_inches="tight", facecolor="white")
 print("wrote", out)
-
-# Keep the formulation notebook's embedded copy in sync: it stores this PNG
-# as a base64 cell attachment so it renders when the .ipynb is downloaded
-# alone.
-try:
-    import base64
-    import nbformat
-
-    nb_path = Path(__file__).parent.parent / "plant layout.ipynb"
-    if nb_path.exists():
-        b64 = base64.b64encode(out.read_bytes()).decode("ascii")
-        nb = nbformat.read(str(nb_path), as_version=4)
-        hits = 0
-        for cell in nb.cells:
-            src = ("".join(cell.source) if isinstance(cell.source, list)
-                   else cell.source)
-            if (cell.cell_type == "markdown"
-                    and "attachment:formulation.png" in src):
-                cell.attachments = {"formulation.png": {"image/png": b64}}
-                hits += 1
-        if hits:
-            nbformat.write(nb, str(nb_path))
-            print(f"re-embedded into {nb_path.name} ({hits} cell)")
-except Exception as e:  # nbformat missing or notebook unreadable: non-fatal
-    print("notebook embed skipped:", e)
