@@ -35,10 +35,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # App source + favicon (referenced by st.set_page_config(page_icon=...)).
 COPY app.py favicon.png ./
 
-# Formulation-tab schematic. The Formulation tab loads images/formulation.png,
-# so it must be in the image; without this the tab silently shows no figure.
-COPY images/formulation.png ./images/
-
 # Overwrite Streamlit's default static index.html: title, favicon, and
 # inject Open Graph + Twitter Card meta tags so links to *.griffith-pse.com
 # unfurl as a rich card on LinkedIn / Slack / iMessage. Without this,
